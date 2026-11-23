@@ -28,9 +28,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import core
+import discover
 
 APP_NAME = "AGE动漫 视频下载器"
-APP_VER = "1.0"
+APP_VER = "1.2"
 
 CHECK_ON = "☑"
 CHECK_OFF = "☐"
@@ -102,6 +103,13 @@ class App(tk.Tk):
         self.prober: Optional[threading.Thread] = None
         self.busy = False
 
+        # 发现页状态
+        self.d_items: list = []
+        self._d_busy = False
+        self._d_pending = None
+        self._d_page = 1
+        self._d_detail_cache: dict = {}
+
         self.out_dir = tk.StringVar(value=os.path.join(
             os.path.expanduser("~"), "Downloads", "AGE动漫"))
         self.url_var = tk.StringVar()
@@ -130,9 +138,44 @@ class App(tk.Tk):
             pass
         style.configure("Treeview", rowheight=24)
         style.configure("Big.TButton", font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 10, "bold"),
+                        padding=(18, 6))
 
+        # ---- 两个 tab ----
+        self.nb = ttk.Notebook(self)
+        self.nb.pack(fill="both", expand=True, padx=6, pady=6)
+
+        page_dl = ttk.Frame(self.nb)
+        self.nb.add(page_dl, text="  下载  ")
+        page_disc = ttk.Frame(self.nb)
+        self.nb.add(page_disc, text="  发现 / 热门  ")
+
+        self._build_download_ui(page_dl)
+        self._build_discover_ui(page_disc)
+
+        # 第一次切到「发现」页时自动加载本周排行
+        self._d_loaded_once = False
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+    def _on_tab_changed(self, _ev=None) -> None:
+        try:
+            if self.nb.index(self.nb.select()) != 1:
+                return
+        except tk.TclError:
+            return
+        if self._d_loaded_once:
+            return
+        # 用户已经在加载/搜索了，别再插一个默认榜单把结果冲掉
+        if getattr(self, "_d_busy", False) or getattr(self, "d_items", None):
+            self._d_loaded_once = True
+            return
+        self._d_loaded_once = True
+        self.on_discover_load()
+
+    # ---------------------------------------------------- tab 1：下载界面 #
+    def _build_download_ui(self, root: tk.Misc) -> None:
         # ---- 地址栏 ----
-        top = ttk.LabelFrame(self, text=" 1. 粘贴网站地址 ")
+        top = ttk.LabelFrame(root, text=" 1. 粘贴网站地址 ")
         top.pack(fill="x", padx=10, pady=(10, 6))
         inner = ttk.Frame(top)
         inner.pack(fill="x", padx=10, pady=8)
@@ -157,7 +200,7 @@ class App(tk.Tk):
                   font=("Microsoft YaHei UI", 9, "bold")).pack(side="left")
 
         # ---- 集数选择 ----
-        mid = ttk.LabelFrame(self, text=" 2. 选择要下载的集 ")
+        mid = ttk.LabelFrame(root, text=" 2. 选择要下载的集 ")
         mid.pack(fill="both", expand=False, padx=10, pady=6)
 
         linebar = ttk.Frame(mid)
@@ -212,7 +255,7 @@ class App(tk.Tk):
         self.tree.bind("<space>", self.on_tree_space)
 
         # ---- 输出选项 ----
-        bot = ttk.LabelFrame(self, text=" 3. 输出设置 ")
+        bot = ttk.LabelFrame(root, text=" 3. 输出设置 ")
         bot.pack(fill="x", padx=10, pady=6)
         r = ttk.Frame(bot)
         r.pack(fill="x", padx=10, pady=(8, 4))
@@ -245,7 +288,7 @@ class App(tk.Tk):
         ttk.Label(r3, textvariable=self.ff_state, width=26).pack(side="left", padx=(8, 0))
 
         # ---- 进度 + 操作 ----
-        pr = ttk.LabelFrame(self, text=" 4. 下载 ")
+        pr = ttk.LabelFrame(root, text=" 4. 下载 ")
         pr.pack(fill="x", padx=10, pady=6)
         p1 = ttk.Frame(pr)
         p1.pack(fill="x", padx=10, pady=(8, 2))
@@ -269,7 +312,7 @@ class App(tk.Tk):
         ttk.Label(act, textvariable=self.status_var, foreground="#555").pack(side="left", padx=(16, 0))
 
         # ---- 日志 ----
-        lg = ttk.LabelFrame(self, text=" 运行日志 ")
+        lg = ttk.LabelFrame(root, text=" 运行日志 ")
         lg.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         self.log_txt = tk.Text(lg, height=8, wrap="none", font=("Consolas", 9),
                                bg="#1e1e1e", fg="#d4d4d4", insertbackground="#d4d4d4")
@@ -277,6 +320,362 @@ class App(tk.Tk):
         self.log_txt.configure(yscrollcommand=lv.set, state="disabled")
         self.log_txt.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=8)
         lv.pack(side="right", fill="y", pady=8, padx=(0, 10))
+
+    # ------------------------------------------------ tab 2：发现 / 热门 #
+    def _build_discover_ui(self, root: tk.Misc) -> None:
+        # ---- 搜索 / 数据源 ----
+        bar = ttk.LabelFrame(root, text=" 搜索与数据源 ")
+        bar.pack(fill="x", padx=8, pady=(8, 6))
+        r1 = ttk.Frame(bar)
+        r1.pack(fill="x", padx=10, pady=(8, 4))
+        ttk.Label(r1, text="搜片名：").pack(side="left")
+        self.d_search_var = tk.StringVar()
+        e = ttk.Entry(r1, textvariable=self.d_search_var)
+        e.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        e.bind("<Return>", lambda _ev: self.on_discover_search())
+        self.btn_d_search = ttk.Button(r1, text="搜索", width=10, style="Big.TButton",
+                                       command=self.on_discover_search)
+        self.btn_d_search.pack(side="left", padx=(0, 6))
+        ttk.Button(r1, text="清空", width=7,
+                   command=self.on_discover_clear).pack(side="left")
+
+        r2 = ttk.Frame(bar)
+        r2.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(r2, text="热门榜：").pack(side="left")
+        self.d_src_var = tk.StringVar(value=discover.SOURCES[0][0])
+        self.d_src_combo = ttk.Combobox(
+            r2, textvariable=self.d_src_var, state="readonly", width=14,
+            values=[n for n, _k in discover.SOURCES])
+        self.d_src_combo.pack(side="left", padx=(0, 8))
+        self.d_src_combo.bind("<<ComboboxSelected>>", lambda _ev: self.on_discover_load())
+        self.btn_d_load = ttk.Button(r2, text="加载", width=8,
+                                     command=self.on_discover_load)
+        self.btn_d_load.pack(side="left", padx=(0, 14))
+
+        ttk.Label(r2, text="第").pack(side="left")
+        self.d_page_var = tk.StringVar(value="1")
+        self.d_page_spin = ttk.Spinbox(r2, from_=1, to=9999, width=5,
+                                       textvariable=self.d_page_var)
+        self.d_page_spin.pack(side="left")
+        ttk.Label(r2, text="页").pack(side="left", padx=(0, 6))
+        self.btn_d_page = ttk.Button(r2, text="翻页", width=8,
+                                     command=self.on_discover_page)
+        self.btn_d_page.pack(side="left", padx=(0, 14))
+        self.btn_d_more = ttk.Button(r2, text="下一页 ▸", width=10,
+                                     command=self.on_discover_next)
+        self.btn_d_more.pack(side="left")
+        self.d_stat_var = tk.StringVar(value="选一个数据源，点「加载」")
+        ttk.Label(r2, textvariable=self.d_stat_var, foreground="#1a4f8b",
+                  font=("Microsoft YaHei UI", 9, "bold")).pack(side="right")
+
+        # ---- 结果表 ----
+        mid = ttk.Frame(root)
+        mid.pack(fill="both", expand=True, padx=8, pady=(0, 6))
+
+        left = ttk.Frame(mid)
+        left.pack(side="left", fill="both", expand=True)
+        cols = ("rank", "name", "year", "area", "rem", "heat", "tags")
+        self.d_tree = ttk.Treeview(left, columns=cols, show="headings", height=14,
+                                   selectmode="browse")
+        heads = {
+            "rank": ("#", 46), "name": ("片名", 300), "year": ("年份", 60),
+            "area": ("地区", 78), "rem": ("状态", 120), "heat": ("热度", 74),
+            "tags": ("标签", 230),
+        }
+        for c in cols:
+            text, w = heads[c]
+            self.d_tree.heading(c, text=text)
+            self.d_tree.column(c, width=w,
+                               anchor="w" if c in ("name", "tags") else "center",
+                               stretch=(c in ("name", "tags")))
+        dvs = ttk.Scrollbar(left, orient="vertical", command=self.d_tree.yview)
+        self.d_tree.configure(yscrollcommand=dvs.set)
+        self.d_tree.pack(side="left", fill="both", expand=True)
+        dvs.pack(side="right", fill="y")
+        self.d_tree.bind("<<TreeviewSelect>>", lambda _ev: self.on_discover_select())
+        self.d_tree.bind("<Double-1>", lambda _ev: self.on_discover_open_web())
+
+        # ---- 详情面板 ----
+        right = ttk.LabelFrame(mid, text=" 详情 ")
+        right.pack(side="right", fill="y", padx=(8, 0))
+        self.d_detail = tk.Text(right, width=40, height=14, wrap="word",
+                                font=("Microsoft YaHei UI", 9),
+                                bg="#fbfbfb", fg="#222", state="disabled",
+                                relief="flat")
+        self.d_detail.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+
+        act = ttk.Frame(right)
+        act.pack(fill="x", padx=8, pady=(0, 8))
+        self.btn_d_dl = ttk.Button(act, text="去下载此片", width=13,
+                                   style="Big.TButton", state="disabled",
+                                   command=self.on_discover_to_download)
+        self.btn_d_dl.pack(fill="x", pady=(0, 4))
+        ttk.Button(act, text="在浏览器打开", width=13,
+                   command=self.on_discover_open_web).pack(fill="x", pady=(0, 4))
+        ttk.Button(act, text="复制播放页地址", width=13,
+                   command=self.on_discover_copy_play).pack(fill="x")
+
+        # ---- 说明 ----
+        tip = ttk.Label(
+            root,
+            text="数据源：本周/本月/总排行榜 · 最新入库（28528 部，可翻页）· 今日更新 · 新番上架 · 首页更新。"
+                 "搜索走站点 ajax 接口，中文可用。",
+            foreground="#777", font=("Microsoft YaHei UI", 8))
+        tip.pack(fill="x", padx=12, pady=(0, 8))
+
+    # ----------------------------------------------------- 发现页事件 #
+    def _d_stat(self, text: str) -> None:
+        self.d_stat_var.set(text)
+
+    def _d_set_detail(self, text: str) -> None:
+        self.d_detail.configure(state="normal")
+        self.d_detail.delete("1.0", "end")
+        self.d_detail.insert("1.0", text)
+        self.d_detail.configure(state="disabled")
+
+    def d_log(self, text: str) -> None:
+        """发现页的日志也写到下载页的日志框，保持只有一处日志。"""
+        self.log(f"[发现] {text}")
+
+    def _d_buttons(self, state: str) -> None:
+        for b in (self.btn_d_search, self.btn_d_load, self.btn_d_page, self.btn_d_more):
+            try:
+                b.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def _d_worker(self, fn, done_text: str = "") -> None:
+        """在后台线程跑一个发现页任务（避免卡死界面）。
+
+        若上一个任务还在跑，不直接丢弃，而是记成"待办"（后来的覆盖先来的），
+        等 d_idle 时再接着跑，这样切 tab 的自动加载不会挡住用户马上点搜索。
+        """
+        if getattr(self, "_d_busy", False):
+            self._d_pending = (fn, done_text)
+            self._d_stat("正在加载，稍后自动切换到你的请求 …")
+            return
+        self._d_pending = None
+        self._d_busy = True
+        self._d_buttons("disabled")
+
+        def run():
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                tb = traceback.format_exc()
+                self.q.put(Msg("d_error", f"{exc}\n{tb[-600:]}"))
+            finally:
+                self.q.put(Msg("d_idle", done_text))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _d_fill(self, items, source_title: str, total: int = 0,
+                page: int = 1, pagecount: int = 1) -> None:
+        for iid in self.d_tree.get_children():
+            self.d_tree.delete(iid)
+        self.d_items = list(items)
+        for i, it in enumerate(self.d_items):
+            self.d_tree.insert("", "end", iid=str(i), values=self._d_row(it, i))
+        pctxt = f"  第 {page} / {pagecount} 页" if pagecount > 1 else ""
+        total_txt = f"共 {total} 部" if total else f"{len(self.d_items)} 条"
+        self._d_stat(f"{source_title} · {total_txt}{pctxt}")
+        if self.d_items:
+            self.d_tree.selection_set("0")
+            self.d_tree.focus("0")
+            self.on_discover_select()
+        else:
+            self._d_set_detail("（没有结果）")
+
+    def _d_row(self, it, idx: int) -> tuple:
+        heat = it.hits or it.hits_week or 0
+        heat_txt = f"{heat:,}" if heat else ""
+        rank = it.rank or (idx + 1)
+        return (rank, it.name, it.year or "-", it.area or "-",
+                it.remarks or "-", heat_txt, it.tags or "")
+
+    def on_discover_load(self) -> None:
+        name = self.d_src_var.get()
+        key = dict(discover.SOURCES).get(name, "rank:本周")
+        self._load_source_async(key, name, 1)
+
+    def on_discover_page(self) -> None:
+        name = self.d_src_var.get()
+        key = dict(discover.SOURCES).get(name, "rank:本周")
+        try:
+            page = max(1, int(self.d_page_var.get()))
+        except Exception:
+            page = 1
+        self._load_source_async(key, name, page)
+
+    def on_discover_next(self) -> None:
+        cur = getattr(self, "_d_page", 1)
+        self._d_page = cur + 1
+        self.d_page_var.set(str(self._d_page))
+        self.on_discover_page()
+
+    def _load_source_async(self, key: str, title: str, page: int) -> None:
+        self._d_page = page
+
+        def work():
+            sess = discover.site_session()
+            d = discover.load_source(sess, key, page)
+            self.q.put(Msg("d_rows", (d, title)))
+
+        self._d_worker(work, "")
+
+    def on_discover_search(self) -> None:
+        wd = self.d_search_var.get().strip()
+        if not wd:
+            self._d_stat("先输入要搜的片名")
+            return
+
+        def work():
+            sess = discover.site_session()
+            r = discover.search_vods(sess, wd, limit=200)
+            d = {"kind": "list", "title": f"搜索「{wd}」", "boards": [],
+                 "items": r["items"], "total": r["total"], "page": 1,
+                 "pagecount": 1}
+            self.q.put(Msg("d_rows", (d, f"搜索「{wd}」")))
+
+        self._d_worker(work, "")
+
+    def on_discover_clear(self) -> None:
+        self.d_search_var.set("")
+        self.d_page_var.set("1")
+        self._d_page = 1
+        self.d_src_var.set(discover.SOURCES[0][0])
+        self.on_discover_load()
+
+    def on_discover_select(self) -> None:
+        sel = self.d_tree.selection()
+        if not sel:
+            self.btn_d_dl.configure(state="disabled")
+            return
+        idx = int(sel[0])
+        if idx >= len(getattr(self, "d_items", [])):
+            return
+        it = self.d_items[idx]
+        self.btn_d_dl.configure(state="normal")
+
+        lines = [f"《{it.name}》", ""]
+        if it.year:
+            lines.append(f"年份：{it.year}")
+        if it.area:
+            lines.append(f"地区：{it.area}")
+        if it.lang:
+            lines.append(f"语言：{it.lang}")
+        if it.type_name:
+            lines.append(f"分类：{it.type_name}")
+        if it.remarks:
+            lines.append(f"状态：{it.remarks}")
+        if it.tags:
+            lines.append(f"标签：{it.tags}")
+        if it.hits or it.hits_day or it.hits_week:
+            lines.append(f"播放：{it.hits}  日 {it.hits_day}  周 {it.hits_week}  月 {it.hits_month}")
+        if it.updated:
+            lines.append(f"更新：{it.updated}")
+        if it.blurb:
+            lines.append("")
+            lines.append(f"简介：{it.blurb[:400]}")
+        lines += ["", f"详情页：{it.web_url}", f"播放页：{it.play_url}"]
+        lines.append("")
+        lines.append("（双击条目可在浏览器打开详情页）")
+        self._d_set_detail("\n".join(lines))
+
+        # suggest / 榜单接口只给 id/name/热度，缺的字段异步补一次详情
+        if not (it.year and it.area) and it.vid:
+            self._d_fetch_detail(it.vid)
+
+    def _d_fetch_detail(self, vid: int) -> None:
+        cache = self._d_detail_cache
+        if vid in cache:
+            return
+        cache[vid] = True          # 占位，避免重复请求
+
+        def work():
+            try:
+                sess = discover.site_session()
+                d = discover.fetch_detail(sess, vid=vid)
+                self.q.put(Msg("d_detail", d))
+            except Exception:      # noqa: BLE001
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _d_apply_detail(self, d: dict) -> None:
+        it_new = d.get("item")
+        if not it_new:
+            return
+        for i, it in enumerate(getattr(self, "d_items", [])):
+            if it.vid == it_new.vid:
+                # 就地补全，保留原有 name/pic
+                if it_new.name and not it.name:
+                    it.name = it_new.name
+                it.year = it_new.year or it.year
+                it.area = it_new.area or it.area
+                it.lang = it_new.lang or it.lang
+                it.remarks = it_new.remarks or it.remarks
+                it.tags = it_new.tags or it.tags
+                it.type_name = it_new.type_name or it.type_name
+                it.updated = it_new.updated or it.updated
+                try:
+                    self.d_tree.item(str(i), values=self._d_row(it, i))
+                except tk.TclError:
+                    pass
+                sel = self.d_tree.selection()
+                if sel and sel[0] == str(i):
+                    self._d_render_detail(it, d.get("kvs") or {},
+                                          d.get("plays") or [])
+                break
+
+    def _d_render_detail(self, it, kvs: dict, plays: list) -> None:
+        lines = [f"《{it.name}》", ""]
+        for k, v in (kvs or {}).items():
+            if v:
+                lines.append(f"{k} {v[:160]}")
+        if plays:
+            lines += ["", f"播放页（{len(plays)} 个）：", plays[0]]
+            if len(plays) > 1:
+                lines.append(f"  …共 {len(plays)} 集")
+        if it.blurb:
+            lines.append("")
+            lines.append(it.blurb[:400])
+        lines += ["", f"详情页：{it.web_url}"]
+        lines.append("（双击条目可在浏览器打开详情页）")
+        self._d_set_detail("\n".join(lines))
+
+    def _d_current(self):
+        sel = self.d_tree.selection()
+        if not sel:
+            return None
+        idx = int(sel[0])
+        items = getattr(self, "d_items", [])
+        return items[idx] if 0 <= idx < len(items) else None
+
+    def on_discover_open_web(self) -> None:
+        it = self._d_current()
+        if it and it.web_url:
+            webbrowser.open(it.web_url)
+
+    def on_discover_copy_play(self) -> None:
+        it = self._d_current()
+        if not it:
+            return
+        url = it.play_url
+        self.clipboard_clear()
+        self.clipboard_append(url)
+        self._d_stat(f"已复制：{url}")
+
+    def on_discover_to_download(self) -> None:
+        """把选中作品的播放页地址填到下载页，并自动解析。"""
+        it = self._d_current()
+        if not it:
+            return
+        url = it.play_url
+        self.url_var.set(url)
+        self.nb.select(0)
+        self.log(f"[发现] 转到下载：{it.name}  {url}")
+        self.on_parse()
 
     # ------------------------------------------------------------- 辅助 #
     def log(self, text: str) -> None:
@@ -287,16 +686,21 @@ class App(tk.Tk):
         self.log_txt.configure(state="disabled")
 
     def _check_ffmpeg(self) -> None:
+        # 注意：tkinter 变量只能在主线程读，所以先在这里取值再交给线程
+        hint = self.ffmpeg_var.get().strip()
+
         def work():
-            exe = core.find_ffmpeg(self.ffmpeg_var.get().strip())
+            exe = core.find_ffmpeg(hint)
             if exe:
                 ver = core.ffmpeg_version(exe)
                 short = ver.replace("ffmpeg version ", "").split(" Copyright")[0].strip()
                 self.q.put(Msg("probe_row", ("ff", f"✓ {short[:40]}")))
-                if not self.ffmpeg_var.get().strip():
-                    self.ffmpeg_var.set(exe)
+                if not hint:
+                    self.q.put(Msg("ff_path", exe))
             else:
                 self.q.put(Msg("probe_row", ("ff", "✗ 未找到（无法封装）")))
+
+        threading.Thread(target=work, daemon=True).start()
         threading.Thread(target=work, daemon=True).start()
 
     def selected_episodes(self) -> list[core.Episode]:
@@ -509,10 +913,12 @@ class App(tk.Tk):
             return
         ep = self.line.episodes[index]
         sess = core.make_session()
+        # tkinter 变量只能在主线程读，先取值
+        drop_ads = bool(self.drop_ads_var.get())
 
         def work():
             try:
-                pr = core.probe_episode(sess, ep.play_url, self.drop_ads_var.get())
+                pr = core.probe_episode(sess, ep.play_url, drop_ads)
                 ep.duration = pr.playlist.total_duration
                 ep.bandwidth = pr.playlist.bandwidth
                 ep.resolution = pr.playlist.resolution
@@ -538,10 +944,11 @@ class App(tk.Tk):
                 f"每集约需 1–3 秒，不下载视频本体。\n\n继续吗？"):
             return
 
-        self.prober = threading.Thread(target=self._probe_all_worker, daemon=True)
+        self.prober = threading.Thread(target=self._probe_all_worker, daemon=True,
+                                       args=(bool(self.drop_ads_var.get()),))
         self.prober.start()
 
-    def _probe_all_worker(self) -> None:
+    def _probe_all_worker(self, drop_ads: bool = True) -> None:
         sess = core.make_session()
         eps = list(self.line.episodes)
         self.bridge.log(f"开始探测 {len(eps)} 集片源信息 …")
@@ -549,7 +956,7 @@ class App(tk.Tk):
             if self.cancel.is_set():
                 break
             try:
-                pr = core.probe_episode(sess, ep.play_url, self.drop_ads_var.get())
+                pr = core.probe_episode(sess, ep.play_url, drop_ads)
                 ep.duration = pr.playlist.total_duration
                 ep.bandwidth = pr.playlist.bandwidth
                 ep.resolution = pr.playlist.resolution
@@ -675,11 +1082,20 @@ class App(tk.Tk):
     def _drain(self) -> None:
         try:
             while True:
-                m = self.q.get_nowait()
-                self._handle(m)
-        except queue.Empty:
-            pass
-        self.after(80, self._drain)
+                try:
+                    m = self.q.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self._handle(m)
+                except Exception:  # noqa: BLE001
+                    # 单条消息处理失败不能拖死整个消息泵
+                    try:
+                        self.log("处理消息出错：" + traceback.format_exc()[-800:])
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            self.after(80, self._drain)
 
     def _handle(self, m: Msg) -> None:
         if m.kind == "log":
@@ -702,6 +1118,33 @@ class App(tk.Tk):
                     if e.nid == p:
                         self._refresh_row(e)
                         break
+        elif m.kind == "ff_path":
+            if not self.ffmpeg_var.get().strip():
+                self.ffmpeg_var.set(str(m.payload))
+        elif m.kind == "d_rows":
+            d, title = m.payload
+            self._d_fill(d.get("items") or [], title,
+                         total=d.get("total", 0), page=d.get("page", 1),
+                         pagecount=d.get("pagecount", 1))
+            boards = d.get("boards") or []
+            if boards:
+                head = "  ".join(
+                    f"{b.group}: {b.count}条/最高{b.top_value}" for b in boards)
+                self.d_log(f"{title} → {head}")
+            else:
+                self.d_log(f"{title} → {len(d.get('items') or [])} 条")
+        elif m.kind == "d_detail":
+            self._d_apply_detail(m.payload)
+        elif m.kind == "d_error":
+            self._d_stat("出错了，详见下载页日志")
+            self.d_log(f"✗ {m.payload}")
+        elif m.kind == "d_idle":
+            self._d_busy = False
+            self._d_buttons("normal")
+            pend = getattr(self, "_d_pending", None)
+            self._d_pending = None
+            if pend:
+                self.after(30, lambda: self._d_worker(*pend))
         elif m.kind == "overall":
             done, total, label = m.payload
             self.overall_var.set(f"总进度  {done} / {total}    {label}")
@@ -889,6 +1332,40 @@ def selftest(argv: list[str]) -> int:
         p(f"    末片: {pl.segments[-1].url}")
     except Exception as exc:  # noqa: BLE001
         p(f"  解析失败: {type(exc).__name__}: {exc}")
+
+    # ---- 发现页（热门 / 搜索）自检 ----
+    p("")
+    p("发现页数据源：")
+    try:
+        import discover as _d
+        ds = _d.site_session()
+        for title, key in _d.SOURCES:
+            try:
+                d = _d.load_source(ds, key, 1)
+                items = d.get("items") or []
+                boards = d.get("boards") or []
+                extra = ""
+                if boards:
+                    extra = " | " + " / ".join(
+                        f"{b.group} {b.count}条" for b in boards)
+                tot = d.get("total")
+                p(f"  {title:<8} {len(items)} 条"
+                  + (f" (total={tot})" if tot else "") + extra)
+                if items:
+                    p(f"      例: {items[0].name} [{items[0].year} "
+                      f"{items[0].area}]")
+            except Exception as exc:  # noqa: BLE001
+                p(f"  {title:<8} 失败 {type(exc).__name__}: {exc}")
+        r = _d.search_vods(ds, "命运", limit=200)
+        p(f"  搜索「命运」: {len(r.get('items') or [])} 条 "
+          f"(total={r.get('total')})")
+        d1 = _d.fetch_detail(ds, vid=12537)
+        it = d1.get("item")
+        if it:
+            p(f"  详情 12537: {it.name} / {it.year} / {it.area} / {it.lang}"
+              f" / {it.remarks} / 播放链接 {len(d1.get('plays') or [])} 个")
+    except Exception as exc:  # noqa: BLE001
+        p(f"  发现页失败: {type(exc).__name__}: {exc}")
 
     text = "\n".join(out)
     # --noconsole 打包时 sys.stdout 为 None，直接 print 会抛 AttributeError
