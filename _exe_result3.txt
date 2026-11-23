@@ -1,0 +1,30 @@
+returncode=0 用时=35.9s
+--- stdout ---
+
+--- stderr ---
+
+--- cli.log ---
+剧名=命运奇异赝品 aid=12537 总集数=13
+选中 1 集: ['第01集']
+输出目录=D:\迅雷下载\video\_exetest 格式=mp4 并发=24 ffmpeg=D:\deepseekproject\agedl\dist\AGE下载器\_internal\ffmpeg\ffmpeg.exe
+[1/1] 第01集 解析片源 …
+[1/1] 第01集 740 段 / 24:39 / 1920x1080 / 已剔除 2 个广告块
+剧名=命运奇异赝品 aid=12537 总集数=13
+选中 1 集: ['第01集']
+输出目录=D:\迅雷下载\video\_exetest2 格式=mp4 并发=24 ffmpeg=D:\deepseekproject\agedl\dist\AGE下载器\_internal\ffmpeg\ffmpeg.exe
+[1/1] 第01集 解析片源 …
+[1/1] 第01集 740 段 / 24:39 / 1920x1080 / 已剔除 2 个广告块
+剧名=命运奇异赝品 aid=12537 总集数=13
+选中 1 集: ['第01集']
+输出目录=D:\迅雷下载\video\_exetest3 格式=mp4 并发=24 ffmpeg=D:\AGE下载器\_internal\ffmpeg\ffmpeg.exe
+[1/1] 第01集 解析片源 …
+[1/1] 第01集 740 段 / 24:39 / 1920x1080 / 已剔除 2 个广告块
+[1/1] 第01集 合并中 …
+[1/1] 第01集 已合并 259.7 MB  平均码率 ≈ 2293 kbps
+[1/1] 第01集 封装 MP4（无损 -c copy）…
+[1/1] 第01集 完成 命运奇异赝品 第01集.mp4  250.2 MB
+结束: 成功 1 失败 0
+  第01集 已完成 D:\迅雷下载\video\_exetest3\命运奇异赝品 第01集.mp4
+
+--- 产物 ---
+  命运奇异赝品 第01集.mp4  262,312,634 字节

@@ -1,0 +1,28 @@
+returncode=1 用时=19.8s
+--- stdout ---
+
+--- stderr ---
+Traceback (most recent call last):
+  File "gui.py", line 926, in <module>
+  File "gui.py", line 918, in main
+  File "gui.py", line 843, in cli
+  File "core.py", line 976, in run
+  File "core.py", line 1033, in _one
+  File "core.py", line 847, in run
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 236, in makedirs
+PermissionError: [WinError 5] �ܾ����ʡ�: 'D:\\Ѹ������\\video\\_exetest2\\_segs'
+
+--- cli.log ---
+剧名=命运奇异赝品 aid=12537 总集数=13
+选中 1 集: ['第01集']
+输出目录=D:\迅雷下载\video\_exetest 格式=mp4 并发=24 ffmpeg=D:\deepseekproject\agedl\dist\AGE下载器\_internal\ffmpeg\ffmpeg.exe
+[1/1] 第01集 解析片源 …
+[1/1] 第01集 740 段 / 24:39 / 1920x1080 / 已剔除 2 个广告块
+剧名=命运奇异赝品 aid=12537 总集数=13
+选中 1 集: ['第01集']
+输出目录=D:\迅雷下载\video\_exetest2 格式=mp4 并发=24 ffmpeg=D:\deepseekproject\agedl\dist\AGE下载器\_internal\ffmpeg\ffmpeg.exe
+[1/1] 第01集 解析片源 …
+[1/1] 第01集 740 段 / 24:39 / 1920x1080 / 已剔除 2 个广告块
+
+--- 产物 ---
