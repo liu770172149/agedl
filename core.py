@@ -13,6 +13,12 @@ core.py - AGE动漫 / maccms 站点解析 + HLS 下载 + TS/MP4 输出
     探测    : describe_blocks, drop_ad_blocks, probe_episode
     转封装  : find_ffmpeg, ffmpeg_version, remux_mp4
     下载    : SegmentDownloader, Job
+
+发现页（浏览 / 榜单 / 搜索）API：
+    数据类  : VodItem, RankEntry, RankBoard, SearchPage
+    网络    : site_session, site_api_data, site_api_suggest
+    解析    : parse_rank_page, parse_card_list
+    门面    : fetch_latest, fetch_hot, fetch_rank, search_vods, resolve_vod_play_url
 """
 from __future__ import annotations
 
